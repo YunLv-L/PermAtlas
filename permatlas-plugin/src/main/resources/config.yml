@@ -1,0 +1,24 @@
+# PermAtlas 兜底权限映射表
+#
+# 当某个命令路径没有任何 Provider 声明时，PermAtlas 会查这张表。
+# 主要用于原版命令，或已停维护、未实现 Provider 的插件。
+#
+# Key：标准化的命令路径（小写、空格分隔）
+# Value：对应的权限节点
+
+fallback:
+  "gamemode survival":  minecraft.command.gamemode
+  "gamemode creative":  minecraft.command.gamemode
+  "gamemode spectator": minecraft.command.gamemode
+  "gamemode adventure": minecraft.command.gamemode
+  "tp":                 minecraft.command.tp
+  "give":               minecraft.command.give
+  "execute":            minecraft.command.execute
+  "summon":             minecraft.command.summon
+  "effect":             minecraft.command.effect
+  "clear":              minecraft.command.clear
+  "kill":               minecraft.command.kill
+  "time set":           minecraft.command.time
+  "weather clear":      minecraft.command.weather
+  "weather rain":       minecraft.command.weather
+  "weather thunder":    minecraft.command.weather
