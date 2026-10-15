@@ -63,10 +63,14 @@ public final class PermAtlas {
 
     /** 精确取某个插件注册的 Provider。 */
     public static Optional<CommandPermissionProvider> providerOf(Plugin plugin) {
-        RegisteredServiceProvider<CommandPermissionProvider> rsp =
+        for (RegisteredServiceProvider<CommandPermissionProvider> rsp :
                 Bukkit.getServicesManager()
-                        .getRegistration(CommandPermissionProvider.class, plugin);
-        return Optional.ofNullable(rsp).map(RegisteredServiceProvider::getProvider);
+                        .getRegistrations(CommandPermissionProvider.class)) {
+            if (plugin.equals(rsp.getPlugin())) {
+                return Optional.of(rsp.getProvider());
+            }
+        }
+        return Optional.empty();
     }
 
     // ------------------------------------------------------------
