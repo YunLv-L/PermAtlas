@@ -5,6 +5,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.PluginDescriptionFile;
+import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.Collections;
 import java.util.List;
@@ -43,8 +44,9 @@ public final class PluginScanner {
             String permission = asString(data.get("permission"));
 
             // 2) 兜底：运行时 PluginCommand 的 getPermission()
-            if (permission == null) {
-                PluginCommand cmd = plugin.getCommand(entry.getKey());
+            //    注意：getCommand(String) 是 JavaPlugin 上的方法，Plugin 接口没有
+            if (permission == null && plugin instanceof JavaPlugin javaPlugin) {
+                PluginCommand cmd = javaPlugin.getCommand(entry.getKey());
                 if (cmd != null && cmd.getPermission() != null
                         && !cmd.getPermission().isEmpty()) {
                     permission = cmd.getPermission();
