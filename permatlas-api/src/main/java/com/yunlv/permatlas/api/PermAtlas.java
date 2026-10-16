@@ -11,10 +11,19 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * PermAtlas 门面：注册 / 发现 / 查询的唯一入口。
+ * PermAtlas 门面：注册 / 发现 / 解析的唯一入口。
  *
- * <p>Consumer 侧推荐调用 {@link #find(String)} 和 {@link #findAll(String)}，
- * 它们已经内置了"精确路径 + 逐级回退 + 兜底表"三层策略。
+ * <p>典型用法（消费者侧）：
+ * <pre>{@code
+ * List<PermissionResolution> results = PermAtlas.resolve("res tp 1");
+ * if (results.isEmpty()) {
+ *     // 没找到任何 Provider 也没有兜底映射
+ * } else {
+ *     for (PermissionResolution r : results) {
+ *         // r.providerName(), r.matchedPath(), r.permission()
+ *     }
+ * }
+ * }</pre>
  */
 public final class PermAtlas {
 
@@ -41,31 +50,21 @@ public final class PermAtlas {
     }
 
     // ------------------------------------------------------------
-    // Consumer 侧
+    // 发现
     // ------------------------------------------------------------
 
     /** 全部 Provider，按优先级从高到低。 */
     public static List<CommandPermissionProvider> providers() {
-        List<RegisteredServiceProvider<CommandPermissionProvider>> list =
-                new ArrayList<>(Bukkit.getServicesManager()
-                        .getRegistrations(CommandPermissionProvider.class));
-        list.sort(Comparator
-                .comparingInt((RegisteredServiceProvider<CommandPermissionProvider> r)
-                        -> r.getPriority().ordinal())
-                .reversed());
-
-        List<CommandPermissionProvider> out = new ArrayList<>(list.size());
-        for (RegisteredServiceProvider<CommandPermissionProvider> r : list) {
-            out.add(r.getProvider());
+        List<CommandPermissionProvider> out = new ArrayList<>();
+        for (RegisteredServiceProvider<CommandPermissionProvider> rsp : sortedRegistrations()) {
+            out.add(rsp.getProvider());
         }
         return out;
     }
 
     /** 精确取某个插件注册的 Provider。 */
     public static Optional<CommandPermissionProvider> providerOf(Plugin plugin) {
-        for (RegisteredServiceProvider<CommandPermissionProvider> rsp :
-                Bukkit.getServicesManager()
-                        .getRegistrations(CommandPermissionProvider.class)) {
+        for (RegisteredServiceProvider<CommandPermissionProvider> rsp : sortedRegistrations()) {
             if (plugin.equals(rsp.getPlugin())) {
                 return Optional.of(rsp.getProvider());
             }
@@ -74,28 +73,79 @@ public final class PermAtlas {
     }
 
     // ------------------------------------------------------------
-    // 查询策略：精确 -> 逐级回退 -> 兜底表
+    // 解析
     // ------------------------------------------------------------
 
     /**
-     * 返回第一个命中的权限节点。
-     * 查询顺序：对每个 Provider，按 {@link CommandPath#ancestry(String)}
-     * 从最具体到最泛尝试；全部未命中则查兜底表。
+     * 解析命令路径，返回所有命中的结果（每个 Provider 至多一条，外加兜底）。
+     *
+     * <p>查询顺序：
+     * <ol>
+     *     <li>遍历所有 Provider（按优先级降序）</li>
+     *     <li>对每个 Provider，按 {@link CommandPath#ancestry(String)} 从最具体到最泛尝试</li>
+     *     <li>取该 Provider 的第一个命中，加入结果</li>
+     *     <li>若所有 Provider 都未命中，再查兜底表（同样走 ancestry 回退）</li>
+     * </ol>
+     *
+     * @param commandPath 用户输入的命令路径（可以是原始字符串，会被标准化）
+     * @return 全部命中结果，按 Provider 优先级降序；无命中时返回空列表
      */
-    public static Optional<String> find(String commandPath) {
-        String path = CommandPath.normalize(commandPath);
-        for (CommandPermissionProvider p : providers()) {
-            String hit = queryProvider(p, path);
-            if (hit != null && !hit.isEmpty()) return Optional.of(hit);
+    public static List<PermissionResolution> resolve(String commandPath) {
+        String requested = CommandPath.normalize(commandPath);
+        List<PermissionResolution> results = new ArrayList<>();
+
+        for (RegisteredServiceProvider<CommandPermissionProvider> rsp : sortedRegistrations()) {
+            CommandPermissionProvider provider = rsp.getProvider();
+            for (String candidate : CommandPath.ancestry(requested)) {
+                String perm = provider.getPermissionForPath(candidate);
+                if (perm != null && !perm.isEmpty()) {
+                    results.add(new PermissionResolution(
+                            requested,
+                            candidate,
+                            perm,
+                            provider.getProviderName(),
+                            rsp.getPriority(),
+                            false
+                    ));
+                    break; // 该 Provider 只取最具体的命中
+                }
+            }
         }
-        return Optional.ofNullable(FallbackPermissions.lookup(path));
+
+        if (results.isEmpty()) {
+            for (String candidate : CommandPath.ancestry(requested)) {
+                String perm = FallbackPermissions.lookup(candidate);
+                if (perm != null && !perm.isEmpty()) {
+                    results.add(new PermissionResolution(
+                            requested,
+                            candidate,
+                            perm,
+                            "PermAtlas/Vanilla",
+                            ServicePriority.Lowest,
+                            true
+                    ));
+                    break;
+                }
+            }
+        }
+
+        return results;
     }
 
-    /** 返回全部命中（多 Provider 同时声明同一路径时使用）。 */
-    public static List<PermissionHit> findAll(String commandPath) {
-        String path = CommandPath.normalize(commandPath);
-        List<PermissionHit> hits = new ArrayList<>();
+    /**
+     * 返回最佳命中（即 {@link #resolve(String)} 的第一条）。
+     * 适合"只要一个答案"的场景。
+     */
+    public static Optional<PermissionResolution> find(String commandPath) {
+        List<PermissionResolution> all = resolve(commandPath);
+        return all.isEmpty() ? Optional.empty() : Optional.of(all.get(0));
+    }
 
+    // ------------------------------------------------------------
+    // 内部工具
+    // ------------------------------------------------------------
+
+    private static List<RegisteredServiceProvider<CommandPermissionProvider>> sortedRegistrations() {
         List<RegisteredServiceProvider<CommandPermissionProvider>> list =
                 new ArrayList<>(Bukkit.getServicesManager()
                         .getRegistrations(CommandPermissionProvider.class));
@@ -103,30 +153,6 @@ public final class PermAtlas {
                 .comparingInt((RegisteredServiceProvider<CommandPermissionProvider> r)
                         -> r.getPriority().ordinal())
                 .reversed());
-
-        for (RegisteredServiceProvider<CommandPermissionProvider> r : list) {
-            String hit = queryProvider(r.getProvider(), path);
-            if (hit != null && !hit.isEmpty()) {
-                hits.add(new PermissionHit(
-                        r.getProvider().getProviderName(), hit, r.getPriority()));
-            }
-        }
-
-        if (hits.isEmpty()) {
-            String fb = FallbackPermissions.lookup(path);
-            if (fb != null) {
-                hits.add(new PermissionHit("PermAtlas/Vanilla", fb, ServicePriority.Lowest));
-            }
-        }
-        return hits;
-    }
-
-    /** 对单个 Provider 走"精确 + 逐级回退"策略。 */
-    private static String queryProvider(CommandPermissionProvider provider, String path) {
-        for (String candidate : CommandPath.ancestry(path)) {
-            String perm = provider.getPermissionForPath(candidate);
-            if (perm != null && !perm.isEmpty()) return perm;
-        }
-        return null;
+        return list;
     }
 }
